@@ -4,7 +4,14 @@ import pandas as pd
 import polars as pl
 import time
 
+from DataLoader import LagsCollection
+
 def main():
+
+    ################################ Actual Work: Init #################################
+    N_lags = 2
+    lags_collection = LagsCollection(N_lags)
+    ############################## END Actual Work: Init ###############################
 
     # Read data
     for data_id in [9]: 
@@ -19,7 +26,7 @@ def main():
         first_date_id = data["date_id"].unique(maintain_order=True).first()
         for date_id in data["date_id"].unique(maintain_order=True):
 
-            if date_id>1532: continue
+            if date_id>1534: continue
 
             data_daily = data.filter(pl.col("date_id")==date_id)
 
@@ -31,12 +38,22 @@ def main():
             # iterate over time_id
             for time_id in data_daily["time_id"].unique(maintain_order=True):
                 provided_data = data_daily.filter(pl.col("time_id")==time_id)
-                provided_lags = data_lags if time_id==0 else None
+                provided_lags = data_lags.clone() if time_id==0 else None
 
-                print(50*'=')
-                print(date_id, time_id)
-                print(provided_data)
-                print(provided_lags)
+                if provided_lags is not None:
+                    print(50*'=')
+                    print(date_id, time_id)
+                    print(provided_data)
+                    print(provided_lags)
+
+                ################################ Actual Work #################################
+                if provided_lags is not None:
+                    lags_collection += provided_lags
+
+                    print('lags_collection')
+                    print(lags_collection.get_collection())
+
+                ################################ END Actual Work #################################
 
 if __name__ == "__main__":
     print('Running ...')

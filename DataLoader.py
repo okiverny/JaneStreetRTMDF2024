@@ -26,8 +26,12 @@ class LagsCollection:
     def __iadd__(self, lag_data: pl.DataFrame | pd.DataFrame):
         """ Add {lag_data} to the right side of the deque using += operator."""
         self.container.append(lag_data)
+        return self
 
     def __combine_current_container(self):
         """ Concatinate polars dataframes. """
         self.combined_data = pl.concat(list(self.container), how='vertical_relaxed')
+
+    def get_collection(self):
+        return list(self.container)
     
