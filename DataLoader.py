@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import polars as pl
 from collections import deque
+from typing import List, Tuple
 
 class LagsCollection:
     def __init__(self, lags_size: int):
@@ -32,6 +33,15 @@ class LagsCollection:
         """ Concatinate polars dataframes. """
         self.combined_data = pl.concat(list(self.container), how='vertical_relaxed')
 
-    def get_collection(self):
+    def get_collection(self) -> List:
         return list(self.container)
+
+    def get_combined_data(self) -> pl.DataFrame:
+        return self.combined_data
+
+    def is_full(self) -> bool:
+        return len(self.container) == self.container.maxlen
+
+    def update_stats(self):
+        self.__combine_current_container()
     
