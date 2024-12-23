@@ -1,7 +1,40 @@
 import polars as pl
-from typing import List, Tuple
+from typing import List, Tuple, Callable, Dict
 
 ALLOWED_AGG_FUNCS = ["mean", "max", "min", "std"]
+
+SEASONAL_ROLLING_MAP = {
+    "mean": lambda s: s.mean(),
+    "min": lambda s: s.min(),
+    "max": lambda s: s.max(),
+    "std": lambda s: s.std(),
+}
+
+def seasonal_rolling(
+    series: pl.Series,
+    season_length: int,
+    window_size: int,
+    agg_func: Callable
+) -> pl.Series:
+    """
+    Apply a seasonal rolling operation to a Polars Series.
+
+    Args:
+        series (pl.Series): Input series to operate on.
+        season_length (int): Number of steps in a seasonal period.
+        window_size (int): Rolling window size.
+        agg_func (Callable): Aggregation function to apply.
+
+    Returns:
+        pl.Series: Resulting series after applying the seasonal rolling operation.
+    """
+    n = len(series)
+    result = [None] * n
+    for i in range(window_size * season_length, n):
+        seasonal_window = series[i - (window_size * season_length):i:season_length]
+        result[i] = agg_func(seasonal_window)
+    return pl.Series(result)
+
 
 def add_lags(
     df: pl.DataFrame,
@@ -87,7 +120,7 @@ def add_rolling_features(
     assert all(func in ALLOWED_AGG_FUNCS for func in agg_funcs), f"`agg_funcs` should be one of {ALLOWED_AGG_FUNCS}"
 
     # Determine 32-bit type if needed
-    dtype = pl.Float32 if use_32_bit and df.schema[column] == pl.Float64 else None
+    dtype = pl.Float32 if use_32_bit else None
 
     new_columns = []
     if ts_id is None:
@@ -142,3 +175,64 @@ def add_rolling_features(
     df = df.with_columns(*new_columns)
     added_features = [col.name for col in new_columns]
     return df, added_features
+
+def add_seasonal_rolling_features(
+    df: pl.DataFrame,
+    seasonal_periods: List[int],
+    rolls: List[int],
+    column: str,
+    agg_funcs: List[str] = ["mean", "std"],
+    ts_id: str = None,
+    n_shift: int = 1,
+    use_32_bit: bool = True,
+) -> Tuple[pl.DataFrame, List[str]]:
+    """
+    Add seasonal rolling statistics from the column provided and add them as new columns in the Polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): Input DataFrame.
+        seasonal_periods (List[int]): List of seasonal periods.
+        rolls (List[int]): List of rolling window sizes.
+        column (str): Column for which features are created.
+        agg_funcs (List[str], optional): Aggregation functions to apply. Defaults to ["mean", "std"].
+        ts_id (str, optional): Unique ID for a time series. Defaults to None.
+        n_shift (int, optional): Number of seasonal shifts to apply before rolling. Defaults to 1.
+        use_32_bit (bool, optional): Reduce memory by using 32-bit types. Defaults to False.
+
+    Returns:
+        Tuple[pl.DataFrame, List[str]]: Updated DataFrame and list of new column names.
+    """
+    assert column in df.columns, f"`{column}` must be a valid column in the DataFrame."
+    assert all(agg in SEASONAL_ROLLING_MAP for agg in agg_funcs), \
+        f"`agg_funcs` must be one of {list(SEASONAL_ROLLING_MAP.keys())}"
+
+    dtype = pl.Float32 if use_32_bit else None
+    new_columns = []
+
+    for sp in seasonal_periods:
+        for roll in rolls:
+            for agg in agg_funcs:
+                col_name = f"{column}_{sp}_seasonal_rolling_{roll}_{agg}"
+                if ts_id is None:
+                    # Single time series
+                    shifted = df[column].shift(n_shift * sp)
+                    seasonal_rolled = seasonal_rolling(
+                        shifted, season_length=sp, window_size=roll, agg_func=SEASONAL_ROLLING_MAP[agg]
+                    )
+                    seasonal_rolled = seasonal_rolled.cast(dtype) if dtype else seasonal_rolled
+                    df = df.with_columns(seasonal_rolled.alias(col_name))
+                else:
+                    # Grouped by time series ID
+                    df = df.with_columns(
+                        df.groupby(ts_id).agg([
+                            seasonal_rolling(
+                                df[column].shift(n_shift * sp),
+                                season_length=sp,
+                                window_size=roll,
+                                agg_func=SEASONAL_ROLLING_MAP[agg]
+                            ).alias(col_name)
+                        ])
+                    )
+                new_columns.append(col_name)
+
+    return df, new_columns
