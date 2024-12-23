@@ -236,3 +236,70 @@ def add_seasonal_rolling_features(
                 new_columns.append(col_name)
 
     return df, new_columns
+
+
+def add_ewma(
+    df: pl.DataFrame,
+    column: str,
+    alphas: List[float] = None,
+    spans: List[float] = None,
+    ts_id: str = None,
+    n_shift: int = 1,
+    use_32_bit: bool = False,
+) -> Tuple[pl.DataFrame, List[str]]:
+    """
+    Add Exponentially Weighted Moving Averages (EWMA) as new features in the Polars DataFrame.
+
+    Args:
+        df (pl.DataFrame): Input DataFrame.
+        column (str): Column to compute EWMA on.
+        alphas (List[float]): List of alpha values (smoothing parameters).
+        spans (List[float]): List of spans for EWMA. Span is converted to alpha internally.
+        ts_id (str): Time series ID column to group by before applying EWMA.
+        n_shift (int): Number of shifts to apply to avoid data leakage.
+        use_32_bit (bool): Flag to use float32 for memory optimization.
+
+    Returns:
+        Tuple[pl.DataFrame, List[str]]: Updated DataFrame and list of new column names.
+    """
+    assert column in df.columns, f"`{column}` must be a valid column in the DataFrame."
+
+    # Convert spans to alphas if spans are provided
+    if spans is not None:
+        assert isinstance(spans, list), "`spans` must be a list of period spans."
+        alphas = [2 / (1 + span) for span in spans]
+
+    if not alphas:
+        raise ValueError("Either `alphas` or `spans` must be provided.")
+
+    dtype = pl.Float32 if use_32_bit else pl.Float64
+    new_columns = []
+
+    for alpha in alphas:
+        col_name = f"{column}_ewma_alpha_{alpha:.3f}"
+
+        if ts_id is None:
+            # Single time series
+            ewma_series = (
+                df[column]
+                .shift(n_shift)
+                .ewm_mean(alpha=alpha, adjust=False, ignore_nulls=False)
+                .cast(dtype)
+            )
+            df = df.with_columns(ewma_series.alias(col_name))
+        else:
+            # Group by ts_id for multiple time series
+            df = df.with_columns(
+                df.groupby(ts_id)
+                .agg(
+                    pl.col(column)
+                    .shift(n_shift)
+                    .ewm_mean(alpha=alpha, adjust=False, ignore_nulls=False)
+                    .alias(col_name)
+                )
+                .explode(col_name)
+            )
+
+        new_columns.append(col_name)
+
+    return df, new_columns
