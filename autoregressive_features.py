@@ -47,7 +47,7 @@ def add_lags(
         for lag in lags:
             lag_col_name = f"{column}_lag_{lag}"
             new_columns.append(
-                df.group_by(ts_id)
+                df.group_by([ts_id])
                 .agg([df[column].shift(lag).alias(lag_col_name).cast(dtype) if dtype else df[column].shift(lag).alias(lag_col_name)])
                 .select(lag_col_name)  # Select only the lagged column
             )

@@ -4,6 +4,8 @@ import polars as pl
 from collections import defaultdict, deque
 from typing import List, Tuple, Dict
 
+from autoregressive_features import add_lags
+
 class LagsCollection:
     def __init__(self, lags_size: int):
         self.lags_size = lags_size
@@ -54,23 +56,25 @@ class SymbolLagsCollection:
     def add_lags(self, lag_data: pl.DataFrame):
         """Add lag data to the collection for each symbol_id."""
         # Split the data by symbol_id and update deques
-        for symbol_id, symbol_data in lag_data.groupby("symbol_id"):
+        for (symbol_id,), symbol_data in lag_data.group_by("symbol_id", maintain_order=True):
             self.symbol_data[symbol_id].append(symbol_data)
+
+    def missing_data_imputation(self, imputation_strategy: str) -> None:
+        print('Implement the missing_data_imputation function')
 
     def construct_features(self, current_data: pl.DataFrame, lags: List[int], feature_cols: List[str]) -> pl.DataFrame:
         """Construct lagged features for the current batch of data."""
         lag_features = []
-        for symbol_id, symbol_df in current_data.groupby("symbol_id"):
+        for (symbol_id,), symbol_df in current_data.group_by("symbol_id", maintain_order=True):
             # Combine historical data for the symbol
-            past_data = pl.concat(list(self.symbol_data[symbol_id]), how="vertical_relaxed") if symbol_id in self.symbol_data else pl.DataFrame()
+            combined_symbol_data = pl.concat(list(self.symbol_data[symbol_id]), how="vertical_relaxed") if symbol_id in self.symbol_data else pl.DataFrame()
 
             # Add lagged features for the symbol
             for col in feature_cols:
                 for lag in lags:
-                    if not past_data.is_empty():
-                        lag_col = f"{col}_lag_{lag}"
+                    if not combined_symbol_data.is_empty():
                         current_data = current_data.with_columns(
-                            current_data[col].shift(lag).alias(lag_col)
+                            current_data[col].shift(lag).alias(f"{col}_lag_{lag}")
                         )
 
             lag_features.append(current_data)
