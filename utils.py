@@ -1,15 +1,6 @@
 import polars as pl
 import numpy as np
 
-def _get_32_bit_dtype(x):
-    dtype = x.dtype
-    if dtype.name.startswith("float"):
-        redn_dtype = "float32"
-    elif dtype.name.startswith("int"):
-        redn_dtype = "int32"
-    else:
-        redn_dtype = None
-    return redn_dtype
 
 def reduce_memory_usage_pl(df: pl.DataFrame) -> pl.DataFrame:
     """ Reduce memory usage by polars dataframe {df} with name {name} by changing its data types."""
