@@ -49,9 +49,10 @@ class LagsCollection:
     
 
 class SymbolLagsCollection:
-    def __init__(self, lags_size: int):
-        self.lags_size = lags_size
-        self.symbol_data: Dict[int, deque] = defaultdict(lambda: deque(maxlen=lags_size))
+    def __init__(self, date_buffer_size: int, lags: List[int]):
+        self.date_buffer_size = date_buffer_size
+        self.symbol_data: Dict[int, deque] = defaultdict(lambda: deque(maxlen=date_buffer_size))
+        self.lags = lags
 
     def add_lags(self, lag_data: pl.DataFrame):
         """Add lag data to the collection for each symbol_id."""

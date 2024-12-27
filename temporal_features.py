@@ -18,7 +18,7 @@ def add_temporal_features(
         df (pl.DataFrame): Input DataFrame.
         field_name (str): Name of the integer time series column.
         periods (List[int]): List of periods for creating cyclic features.
-        add_elapsed (bool): Add time elapsed as the original value divided by 1000. Defaults to True.
+        add_elapsed (bool): Add time elapsed as the original value divided by 3000. Defaults to True.
         prefix (str): Prefix for new columns. Defaults to None.
         drop (bool): Drop the original time series column after feature creation. Defaults to True.
         use_32_bit (bool): Use 32-bit data types for memory optimization. Defaults to False.
@@ -42,11 +42,11 @@ def add_temporal_features(
         )
         added_features.append(feature_name)
 
-    # Add elapsed feature (original value divided by 1000)
+    # Add elapsed feature (original value divided by 3000)
     if add_elapsed:
         elapsed_name = f"{prefix}Elapsed"
         df = df.with_columns(
-            (df[field_name] / 1000).alias(elapsed_name)
+            (df[field_name] / 3000).alias(elapsed_name)
         )
         added_features.append(elapsed_name)
 
