@@ -4,8 +4,6 @@ import polars as pl
 from collections import defaultdict, deque
 from typing import List, Tuple, Dict
 
-from autoregressive_features import add_lags
-
 class LagsCollection:
     def __init__(self, lags_size: int):
         self.lags_size = lags_size
