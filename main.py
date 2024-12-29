@@ -31,7 +31,7 @@ def main():
     processed_data = pl.DataFrame()
 
     # Read data
-    for data_file_index, data_id in enumerate([8, 9]):
+    for data_file_index, data_id in enumerate([9]):  # 4,5,6,7,8,9
         data=pl.read_parquet(f"/Users/okiverny/workspace/Kaggle/JaneStreetRTMDF2024/data/partition_id={data_id}/part-0.parquet")
         print(f'This file contains {len(data["date_id"].unique(maintain_order=True))} days of data')
 
@@ -40,12 +40,14 @@ def main():
         responder_cols = [f"responder_{idx}" for idx in range(9)]
         rename_dict = {responder_col:lags_col for lags_col, responder_col in zip(lags_cols, responder_cols)}
 
-        # iterate over date_id
+        # Get first and last date_id in this file
         first_date_id = data["date_id"].unique(maintain_order=True).to_list()[0]
         last_date_id = data["date_id"].unique(maintain_order=True).to_list()[-1]
+
+        # iterate over date_id
         for date_id in data["date_id"].unique(maintain_order=True):
 
-            #if date_id>1538: continue
+            if date_id>1538: continue
 
             data_daily = data.filter(pl.col("date_id")==date_id)
 
@@ -62,77 +64,45 @@ def main():
                 provided_data = data_daily.filter(pl.col("time_id")==time_id)
                 provided_lags = data_lags.clone() if time_id==0 else None
 
-                # if provided_lags is not None:
-                #     print(50*'=')
-                #     print(date_id, time_id)
-                #     print('Provided Data:')
-                #     print(provided_data)
-                #     print(provided_lags)
 
                 ################################ Actual Work #################################
                 start = time.time()
 
                 if provided_lags is not None:
-                    #lags_collection += provided_lags
+                    # Add new lags data to collection
                     symbol_lags_collection.add_lags(provided_lags)
-
-
-                    #print('symbol_lags_collection')
-                    #print(symbol_lags_collection.symbol_data.keys)
-                    #print( [i for i in symbol_lags_collection.symbol_data] )
-                    #print(len(symbol_lags_collection))
 
                     combined_lagged_data = []
 
                     # Construct features for each 'symbol_id' in test data
                     for symbol_id in provided_data['symbol_id']:
-                        #print('====================== Processing symbol_id:', symbol_id)
+
                         if len(symbol_lags_collection.get_lags(symbol_id))==0:
                             print(f'No lags for symbol_id={symbol_id} is available! Skipping computation of lagged and temporal features')
-
                         else:
-                            #print(100*'===')
+                            # Add lags features
                             df, lag_features = add_lags(symbol_lags_collection.get_lags(symbol_id=symbol_id), [968*(i+1) for i in range(2)], 'responder_6_lag_1')
-                            #print(df)
-                            #print('lag_features', lag_features)
 
-                            #print(100*'===')
-                            df, rolling_features = add_rolling_features(df, rolls=[16, 60, 120], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
-                            #print(df)
-                            #print('rolling_features:', rolling_features)
+                            # Add rolling features
+                            df, rolling_features = add_rolling_features(df, rolls=[60, 120], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
-                            #print(100*'===')
-                            df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968, 2*968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
-                            #print(df)
-                            #print('season_rolling_features:', season_rolling_features)
+                            # Add seasonal rolling features
+                            df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
-                            #print(100*'===')
-                            df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[968, 4*968], n_shift=0, use_32_bit=True)
-                            #print(df)
-                            #print('ewma_features:', ewma_features)
+                            # Add ewma features
+                            df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[484, 968, 5*968], n_shift=0, use_32_bit=True)
 
-                            # TODO: Move out of symbol_id loop ?
-                            #print(100*'===')
-                            df, temporal_features_time = add_temporal_features(df, 'time_id', periods=[8, 16, 242], add_elapsed=True, drop=False, use_32_bit=True)
-                            df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5], add_elapsed=True, drop=False, use_32_bit=True)
-                            #print(df)
-                            #print('temporal_features_time:', temporal_features_time)
-                            #print('temporal_features_date:', temporal_features_date)
+                            # Add temporal features
+                            df, temporal_features_time = add_temporal_features(df, 'time_id', periods=[242, 484], add_elapsed=True, drop=False, use_32_bit=True)
+                            df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5, 20], add_elapsed=False, drop=False, use_32_bit=True)
 
-                            #print(100*'===')
-                            df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_16', 'date_id_Period_5'], max_values=[16, 5], n_fourier_terms=3, use_32_bit=True)
-                            #print(df)
-                            #print('fourier_features:', fourier_features)
-
-                            #print('The resulting lag data frame:')
-                            #print(df)
+                            # Add Fourier features
+                            df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_242', 'date_id_Period_5', 'date_id_Period_20'], max_values=[242, 5, 20], n_fourier_terms=3, use_32_bit=True)
 
                             # Increment the 'date_id' column by 1 and keep only the values from 'today'
-                            #print(f'Today is {date_id}')
                             df = df.with_columns(
                                 (pl.col("date_id") + 1).alias("date_id")  # Increment values and keep the same column name
                             ).filter(pl.col("date_id")==date_id)
-                            #print(df)
 
                             # Append to the list
                             combined_lagged_data.append(df)
@@ -147,8 +117,6 @@ def main():
 
                 # Join test data and lagged data
                 processed_data_time_id = provided_data.join(combined_lagged_data, on=['date_id', 'time_id', 'symbol_id'],  how='left')
-                #print(processed_data_time_id)
-                #print(processed_data_time_id.columns)
 
                 # Append the processed data from today's date_id
                 today_processed_data.append(processed_data_time_id)
@@ -167,7 +135,7 @@ def main():
 
             # Store a portion of data with 60 days
             if ((date_id+1) % 60 == 0) or (data_id==9 and date_id==last_date_id):
-                print('Saving a partinion of processed data (60 days)')
+                print(f'Saving a partinion of processed data ({ len(processed_data["time_id"].unique()) } days)')
                 processed_data.write_parquet(f'processed_data/data_part_{(date_id+1) // 60}.parquet')
                 processed_data = pl.DataFrame()
 
