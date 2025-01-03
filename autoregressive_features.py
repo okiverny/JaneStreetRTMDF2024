@@ -276,7 +276,7 @@ def add_ewma(
     new_columns = []
 
     for alpha in alphas:
-        col_name = f"{column}_ewma_alpha_{alpha:.3f}"
+        col_name = f"{column}_ewma_alpha_{alpha:.4f}"
 
         if ts_id is None:
             # Single time series
