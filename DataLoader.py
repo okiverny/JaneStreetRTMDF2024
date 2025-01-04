@@ -5,6 +5,16 @@ from collections import defaultdict, deque
 from typing import List, Tuple, Dict
 from Configs import MissingValueConfig
 from utils import check_nulls
+from autoregressive_features import (
+    add_lags,
+    add_rolling_features,
+    add_seasonal_rolling_features,
+    add_ewma
+)
+from temporal_features import (
+    add_temporal_features,
+    bulk_add_fourier_features
+)
     
 
 class SymbolLagsCollection:
@@ -54,24 +64,36 @@ class SymbolLagsCollection:
     def missing_data_imputation(self, imputation_strategy: str) -> None:
         print('Implement the missing_data_imputation function')
 
-    def construct_features(self, current_data: pl.DataFrame, lags: List[int], feature_cols: List[str]) -> pl.DataFrame:
+    def construct_features(self, df: pl.DataFrame) -> pl.DataFrame:
         """Construct lagged features for the current batch of data."""
-        lag_features = []
-        for (symbol_id,), symbol_df in current_data.group_by("symbol_id", maintain_order=True):
-            # Combine historical data for the symbol
-            combined_symbol_data = pl.concat(list(self.symbol_data[symbol_id]), how="vertical_relaxed") if symbol_id in self.symbol_data else pl.DataFrame()
+        
+        # Add lags features
+        df, lag_features = add_lags(df, [968*(i+1) for i in range(2)], 'responder_6_lag_1')
 
-            # Add lagged features for the symbol
-            for col in feature_cols:
-                for lag in lags:
-                    if not combined_symbol_data.is_empty():
-                        current_data = current_data.with_columns(
-                            current_data[col].shift(lag).alias(f"{col}_lag_{lag}")
-                        )
+        # Add rolling features
+        df, rolling_features = add_rolling_features(df, rolls=[120, 484], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
-            lag_features.append(current_data)
+        # Add seasonal rolling features
+        df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
-        return pl.concat(lag_features, how="vertical_relaxed")
+        # Add ewma features
+        df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[242, 484, 968, 5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_1_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_2_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_3_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_4_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_5_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_7_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+        # df, ewma_features = add_ewma(df, 'responder_8_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
+
+        # Add temporal features
+        df, temporal_features_time = add_temporal_features(df, 'time_id', periods=[332, 725, 968], add_elapsed=True, drop=False, use_32_bit=True)
+        df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5, 20], add_elapsed=False, drop=False, use_32_bit=True)
+
+        # Add Fourier features
+        df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_968', 'date_id_Period_5', 'date_id_Period_20'], max_values=[968, 5, 20], n_fourier_terms=3, use_32_bit=True)
+
+        return df
 
     def get_lags(self, symbol_id: int) -> pl.DataFrame:
         """Retrieve historical data for a specific symbol_id."""
