@@ -1,8 +1,93 @@
 import copy
 from dataclasses import MISSING, dataclass, field
-from typing import List, Union
+from typing import List, Union, Tuple
+from sklearn.base import BaseEstimator, clone
+from autoregressive_features import (
+    add_lags,
+    add_rolling_features,
+    add_seasonal_rolling_features,
+    add_ewma
+)
 
 import polars as pl
+
+@dataclass
+class LagFeaturesConfig:
+    lag_columns: List[str] = field(
+        default_factory=list,
+        metadata={"help": "Column names to be lagged with values from 'lag_values' list.  The tag '_lag_N' will be added."},
+    )
+    lag_values: List[int] = field(
+        default_factory=list,
+        metadata={"help": "Columns from 'lag_columns' to be lagged by these values. The tag '_lag_N' will be added."},
+    )
+
+    rolling_columns: List[str] = field(
+        default_factory=list,
+        metadata={"help": "Column names to be rolled"},
+    )
+    rolling_values: List[int] = field(
+        default_factory=list,
+        metadata={"help": "Rolling windows."},
+    )
+    rolling_agg_funcs: List[str] = field(
+        default_factory=list,
+        metadata={"help": "Rolling functions."},
+    )
+
+    seasonal_rolling_columns: List[str] = field(
+        default_factory=list,
+        metadata={"help": "Column names to be rolled"},
+    )
+    seasonal_periods: List[int] = field(
+        default_factory=list,
+        metadata={"help": "Seasonal Rolling periods."},
+    )
+    seasonal_rolls: List[int] = field(
+        default_factory=list,
+        metadata={"help": "Rolling windows."},
+    )
+    seasonal_rolling_agg_funcs: List[str] = field(
+        default_factory=list,
+        metadata={"help": "Rolling functions."},
+    )
+
+
+    def create_lag_features(self, df: pl.DataFrame) -> Tuple[pl.DataFrame, List[str]]:
+        # Example:
+        # lags_config = LagFeaturesConfig(
+        #     lag_columns=['responder_6_lag_1'],
+        #     lag_values=[968*(i+1) for i in range(2)],
+        #     rolling_columns=['responder_6_lag_1'],
+        #     rolling_values=[120, 484],
+        #     rolling_agg_funcs=["mean", "std"],
+        #     seasonal_rolling_columns=['responder_6_lag_1'],
+        #     seasonal_periods=[968],
+        #     seasonal_rolls=[3],
+        #     seasonal_rolling_agg_funcs=["mean", "std"],
+        # )
+
+        # Add lags features
+        lag_features = []
+        for column in self.lag_columns:
+            df, new_features = add_lags(df, self.lag_values, column)
+            lag_features.append(new_features)
+
+        # Add rolling features
+        rolling_features = []
+        for column in self.rolling_columns:
+            df, new_features = add_rolling_features(df, rolls=self.rolling_values, column=column, agg_funcs=self.rolling_agg_funcs, n_shift=0, use_32_bit=True)
+            rolling_features.append(new_features)
+
+        # Add seasonal rolling features
+        seasonal_rolling_features = []
+        for column in self.seasonal_rolling_columns:
+            df, new_features = add_seasonal_rolling_features(df, seasonal_periods=self.seasonal_periods, rolls=self.seasonal_rolls, column=column, agg_funcs=self.seasonal_rolling_agg_funcs, n_shift=0, use_32_bit=True)
+            seasonal_rolling_features.append(new_features)
+
+        # More to be added ...
+
+        return (df, lag_features+rolling_features)
 
 
 @dataclass
@@ -188,3 +273,44 @@ class FeatureConfig:
         )
 
         return X, y, y_orig
+
+
+@dataclass
+class ModelConfig:
+
+    model: BaseEstimator = field(
+        default=MISSING, metadata={"help": "Sci-kit Learn Compatible model instance"}
+    )
+
+    name: str = field(
+        default=None,
+        metadata={
+            "help": "Name or identifier for the model. If left None, will use the string representation of the model"
+        },
+    )
+
+    normalize: bool = field(
+        default=False,
+        metadata={"help": "Flag whether to normalize the input or not"},
+    )
+    fill_missing: bool = field(
+        default=True,
+        metadata={"help": "Flag whether to fill missing values before fitting"},
+    )
+    encode_categorical: bool = field(
+        default=False,
+        metadata={"help": "Flag whether to encode categorical values before fitting"},
+    )
+    categorical_encoder: BaseEstimator = field(
+        default=None,
+        metadata={"help": "Categorical Encoder to be used"},
+    )
+
+    def __post_init__(self):
+        assert not (
+            self.encode_categorical and self.categorical_encoder is None
+        ), "`categorical_encoder` cannot be None if `encode_categorical` is True"
+
+    def clone(self):
+        self.model = clone(self.model)
+        return self
