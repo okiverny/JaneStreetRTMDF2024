@@ -73,3 +73,22 @@ def reduce_mem_usage(df, float16_as32=True):
     print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
 
     return df
+
+
+def check_nulls(df: pl.DataFrame):
+    null_columns = df.select(
+        [pl.col(col).is_null().any().alias(col) for col in df.columns]
+    ).row(0)  # Get the first row, which contains True/False for each column
+    null_columns = [col for col, has_nulls in zip(df.columns, null_columns) if has_nulls]
+    if len(null_columns)>0: print(null_columns)
+    #######
+    # Check for null counts for each column
+    null_counts = (
+        df.select(
+            [pl.col(col).is_null().sum().alias(col) for col in df.columns]
+        )
+        .transpose(include_header=True).filter(pl.col("column_0") > 0)
+    )
+    # Convert to a dictionary or DataFrame for viewing
+    null_summary = null_counts.rename({"column_0": "null_count"})
+    if len(null_columns)>0: print(null_summary)
