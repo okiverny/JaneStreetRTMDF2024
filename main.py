@@ -5,26 +5,30 @@ import polars as pl
 import time
 
 from DataLoader import SymbolLagsCollection
-from autoregressive_features import (
-    add_lags,
-    add_rolling_features,
-    add_seasonal_rolling_features,
-    add_ewma
+from Configs import (
+    MissingValueConfig,
+    FeatureConfig,
+    LagFeaturesConfig
 )
-from temporal_features import (
-    add_temporal_features,
-    bulk_add_fourier_features
-)
+from utils import check_nulls
 
 def main():
 
     ################################ Actual Work: Init #################################
+    # missing_config = MissingValueConfig(
+    #     bfill_columns=[],
+    #     ffill_columns=[f"feature_{idx:02d}" for idx in range(79)],
+    #     zero_fill_columns=[f"feature_{idx:02d}" for idx in range(79)],
+    #     fill_symbols_daily=True
+    # )
+    missing_config=None
+
     date_buffer_size = 5
-    #lags_collection = LagsCollection(date_buffer_size)
     symbol_lags_collection = SymbolLagsCollection(
         date_buffer_size=date_buffer_size,
-        lags=[967*(i+1) for i in range(2)]
+        missing_config=missing_config
     )
+    
     ############################## END Actual Work: Init ###############################
 
     # Collected and processed data and periodically save to file
@@ -68,36 +72,25 @@ def main():
                 ################################ Actual Work #################################
                 start = time.time()
 
+                # fill missing values in features of test data
+                if missing_config!=None:
+                    provided_data = missing_config.impute_missing_values(provided_data)
+
                 if provided_lags is not None:
                     # Add new lags data to collection
                     symbol_lags_collection.add_lags(provided_lags)
 
                     combined_lagged_data = []
+                    new_symbols_appeared = []
 
                     # Construct features for each 'symbol_id' in test data
                     for symbol_id in provided_data['symbol_id']:
 
                         if len(symbol_lags_collection.get_lags(symbol_id))==0:
                             print(f'No lags for symbol_id={symbol_id} is available! Skipping computation of lagged and temporal features')
+                            new_symbols_appeared.append(symbol_id)
                         else:
-                            # Add lags features
-                            df, lag_features = add_lags(symbol_lags_collection.get_lags(symbol_id=symbol_id), [968*(i+1) for i in range(2)], 'responder_6_lag_1')
-
-                            # Add rolling features
-                            df, rolling_features = add_rolling_features(df, rolls=[60, 120], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
-
-                            # Add seasonal rolling features
-                            df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
-
-                            # Add ewma features
-                            df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[484, 968, 5*968], n_shift=0, use_32_bit=True)
-
-                            # Add temporal features
-                            df, temporal_features_time = add_temporal_features(df, 'time_id', periods=[242, 484], add_elapsed=True, drop=False, use_32_bit=True)
-                            df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5, 20], add_elapsed=False, drop=False, use_32_bit=True)
-
-                            # Add Fourier features
-                            df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_242', 'date_id_Period_5', 'date_id_Period_20'], max_values=[242, 5, 20], n_fourier_terms=3, use_32_bit=True)
+                            df = symbol_lags_collection.construct_features(symbol_lags_collection.get_lags(symbol_id=symbol_id))
 
                             # Increment the 'date_id' column by 1 and keep only the values from 'today'
                             df = df.with_columns(
@@ -131,11 +124,16 @@ def main():
             # Concatenate the today's processed data with the data from previous days
             processed_data = pl.concat([processed_data]+today_processed_data)
             print(date_id, (date_id+1) % 60,  (date_id+1) // 60)
-            print(processed_data)
+            #print(processed_data)
+
+            ################################ Check Nulls ################################
+            #check_nulls(processed_data)
+            ################################ Check Nulls ################################
 
             # Store a portion of data with 60 days
             if ((date_id+1) % 60 == 0) or (data_id==9 and date_id==last_date_id):
-                print(f'Saving a partinion of processed data ({ len(processed_data["time_id"].unique()) } days)')
+                print(f'Saving a partinion of processed data ({ len(processed_data["date_id"].unique()) } days)')
+                if not os.path.exists('processed_data/'): os.makedirs('processed_data/')
                 processed_data.write_parquet(f'processed_data/data_part_{(date_id+1) // 60}.parquet')
                 processed_data = pl.DataFrame()
 
