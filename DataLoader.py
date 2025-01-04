@@ -18,11 +18,10 @@ from temporal_features import (
     
 
 class SymbolLagsCollection:
-    def __init__(self, date_buffer_size: int, missing_config: MissingValueConfig, lags: List[int]):
+    def __init__(self, date_buffer_size: int, missing_config: MissingValueConfig):
         self.date_buffer_size = date_buffer_size
         self.symbol_data: Dict[int, deque] = defaultdict(lambda: deque(maxlen=date_buffer_size))
         self.missing_config = missing_config
-        self.lags = lags
 
     def add_lags(self, lag_data: pl.DataFrame):
         """Add lag data to the collection for each symbol_id."""
@@ -59,7 +58,7 @@ class SymbolLagsCollection:
                     )
                     self.symbol_data[symbol_id].appendleft(prev_data)
 
-        print([x for x in self.symbol_data])
+        #print([x for x in self.symbol_data])
 
     def missing_data_imputation(self, imputation_strategy: str) -> None:
         print('Implement the missing_data_imputation function')
@@ -68,30 +67,26 @@ class SymbolLagsCollection:
         """Construct lagged features for the current batch of data."""
         
         # Add lags features
-        df, lag_features = add_lags(df, [968*(i+1) for i in range(2)], 'responder_6_lag_1')
+        #df, lag_features = add_lags(df, [968*(i+1) for i in range(2)], 'responder_6_lag_1')
 
         # Add rolling features
-        df, rolling_features = add_rolling_features(df, rolls=[120, 484], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
+        #df, rolling_features = add_rolling_features(df, rolls=[120, 484], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
         # Add seasonal rolling features
-        df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
+        #df, season_rolling_features = add_seasonal_rolling_features(df, seasonal_periods=[968], rolls=[3], column='responder_6_lag_1', agg_funcs=["mean", "std"], n_shift=0, use_32_bit=True)
 
         # Add ewma features
-        df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[242, 484, 968, 5*968], n_shift=0, use_32_bit=True)
+        #df, ewma_features = add_ewma(df, 'responder_6_lag_1', spans=[242, 484, 968, 5*968], n_shift=0, use_32_bit=True)
         # df, ewma_features = add_ewma(df, 'responder_1_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_2_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_3_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_4_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_5_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_7_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
-        # df, ewma_features = add_ewma(df, 'responder_8_lag_1', spans=[5*968], n_shift=0, use_32_bit=True)
 
         # Add temporal features
         df, temporal_features_time = add_temporal_features(df, 'time_id', periods=[332, 725, 968], add_elapsed=True, drop=False, use_32_bit=True)
-        df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5, 20], add_elapsed=False, drop=False, use_32_bit=True)
+        #df, temporal_features_date = add_temporal_features(df, 'date_id', periods=[5, 20], add_elapsed=False, drop=False, use_32_bit=True)
 
         # Add Fourier features
-        df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_968', 'date_id_Period_5', 'date_id_Period_20'], max_values=[968, 5, 20], n_fourier_terms=3, use_32_bit=True)
+        #df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_968', 'date_id_Period_5', 'date_id_Period_20'], max_values=[968, 5, 20], n_fourier_terms=3, use_32_bit=True)
+        df, fourier_features = bulk_add_fourier_features(df, columns_to_encode=['time_id_Period_968'], max_values=[968], n_fourier_terms=5, use_32_bit=True)
+        #df.drop(['time_id_Period_968'])
 
         return df
 
@@ -99,8 +94,8 @@ class SymbolLagsCollection:
         """Retrieve historical data for a specific symbol_id."""
         combined_df = pl.concat(list(self.symbol_data[symbol_id]), how="vertical_relaxed") if symbol_id in self.symbol_data else pl.DataFrame()
 
-        if len(combined_df)>0:
-            check_nulls(combined_df)
+        #if len(combined_df)>0:
+        #    check_nulls(combined_df)
 
         #if self.missing_config!=None:
         #    combined_df = self.missing_config.impute_missing_values(combined_df)
