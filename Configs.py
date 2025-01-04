@@ -20,6 +20,11 @@ class MissingValueConfig:
         metadata={"help": "Column names to be filled with 0"},
     )
 
+    fill_symbols_daily: bool = field(
+        default_factory=bool,
+        metadata={"help": "A Boolean flag for filling missing data for each symbol_id in the collection deque."},
+    )
+
     def impute_missing_values(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Impute missing values in the DataFrame according to specified strategies.
@@ -31,7 +36,7 @@ class MissingValueConfig:
         if self.bfill_columns:
             for col in self.bfill_columns:
                 if col in df.columns:
-                    df = df.with_column(
+                    df = df.with_columns(
                         pl.col(col).fill_null(strategy="backward").alias(col)
                     )
 
@@ -39,7 +44,7 @@ class MissingValueConfig:
         if self.ffill_columns:
             for col in self.ffill_columns:
                 if col in df.columns:
-                    df = df.with_column(
+                    df = df.with_columns(
                         pl.col(col).fill_null(strategy="forward").alias(col)
                     )
 
@@ -47,28 +52,28 @@ class MissingValueConfig:
         if self.zero_fill_columns:
             for col in self.zero_fill_columns:
                 if col in df.columns:
-                    df = df.with_column(
+                    df = df.with_columns(
                         pl.col(col).fill_null(0).alias(col)
                     )
 
         # Check for remaining null values and handle them
         null_columns = [
-            col for col in df.columns if df.select(pl.col(col).is_null()).any().row(0)[0]
+            col for col in df.columns if df.select(pl.col(col).is_null().any()).row(0)[0]
         ]
 
         # Separate numeric and non-numeric columns for further handling
-        numeric_cols = [col for col in null_columns if pl.col(col).dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
+        numeric_cols = [col for col in null_columns if df.schema[col] in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)]
         non_numeric_cols = [col for col in null_columns if col not in numeric_cols]
 
         # Fill remaining numeric columns with their mean
         for col in numeric_cols:
-            df = df.with_column(
-                pl.col(col).fill_null(df.select(pl.col(col).mean()).item()).alias(col)
+            df = df.with_columns(
+                pl.col(col).fill_null(pl.col(col).mean()).alias(col)
             )
 
         # Fill remaining non-numeric columns with "NA"
         for col in non_numeric_cols:
-            df = df.with_column(
+            df = df.with_columns(
                 pl.col(col).fill_null("NA").alias(col)
             )
 
