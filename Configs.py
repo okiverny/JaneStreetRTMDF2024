@@ -275,8 +275,13 @@ class FeatureConfig:
             if self.original_target in df.columns
             else None
         )
+        w = (
+            df.select(pl.col([self.weight] + self.index_cols))
+            if self.weight in df.columns
+            else None
+        )
 
-        return X, y, y_orig
+        return X, y, y_orig, w
 
 
 @dataclass
