@@ -1,6 +1,19 @@
 import polars as pl
 import numpy as np
 
+def R2w_metric(y_true, y_pred, weight):
+    """
+    R^2 metric with weights from sklearn
+    """
+    is_higher_better = True
+    return 'R2w_score', r2_score(y_true, y_pred, sample_weight = weight), is_higher_better
+
+def R2_metric(y_true, y_pred):
+    """
+    R^2 metric from sklearn
+    """
+    is_higher_better = True
+    return 'r2_score', r2_score(y_true, y_pred), is_higher_better
 
 def reduce_memory_usage_pl(df: pl.DataFrame) -> pl.DataFrame:
     """ Reduce memory usage by polars dataframe {df} with name {name} by changing its data types."""

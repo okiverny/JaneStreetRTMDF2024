@@ -261,22 +261,22 @@ class FeatureConfig:
         feature_list = list(set(feature_list))
         delete_index_cols = list(set(self.index_cols) - set(self.feature_list))
 
-        # Extract X, y, and y_orig
+        # Extract X, y, y_orig and w
         X = df.select(
             pl.col(feature_list + self.index_cols).exclude(delete_index_cols)
         )
         y = (
-            df.select(pl.col([self.target] + self.index_cols))
+            df.select(pl.col([self.target])) # + self.index_cols
             if self.target in df.columns
             else None
         )
         y_orig = (
-            df.select(pl.col([self.original_target] + self.index_cols))
+            df.select(pl.col([self.original_target])) # + self.index_cols
             if self.original_target in df.columns
             else None
         )
         w = (
-            df.select(pl.col([self.weight] + self.index_cols))
+            df.select(pl.col([self.weight])) # + self.index_cols
             if self.weight in df.columns
             else None
         )
