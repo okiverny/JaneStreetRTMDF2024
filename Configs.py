@@ -166,7 +166,7 @@ class MissingValueConfig:
 
 @dataclass
 class FeatureConfig:
-    date: List[str] = field(
+    date: str = field(
         default=MISSING,
         metadata={"help": "Column name of the date column"},
     )
@@ -179,6 +179,10 @@ class FeatureConfig:
         metadata={
             "help": "Column name of the original target column in case of transformed target. If None, it will be assigned the same value as target"
         },
+    )
+    weight: str = field(
+        default=None,
+        metadata={"help": "Column name of the weight column"},
     )
     continuous_features: List[str] = field(
         default_factory=list,
