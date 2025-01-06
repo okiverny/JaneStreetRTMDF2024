@@ -1,15 +1,18 @@
 import copy
+import warnings
+import polars as pl
+import numpy as np
 from dataclasses import MISSING, dataclass, field
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Dict
 from sklearn.base import BaseEstimator, clone
+from sklearn.preprocessing import StandardScaler
 from autoregressive_features import (
     add_lags,
     add_rolling_features,
     add_seasonal_rolling_features,
     add_ewma
 )
-
-import polars as pl
+from utils import intersect_list, difference_list
 
 @dataclass
 class LagFeaturesConfig:
@@ -259,6 +262,7 @@ class FeatureConfig:
         if not exogenous:
             feature_list = list(set(feature_list) - set(self.exogenous_features))
         feature_list = list(set(feature_list))
+
         delete_index_cols = list(set(self.index_cols) - set(self.feature_list))
 
         # Extract X, y, y_orig and w
@@ -323,3 +327,177 @@ class ModelConfig:
     def clone(self):
         self.model = clone(self.model)
         return self
+
+
+class MLForecast:
+    def __init__(
+        self,
+        model_config: ModelConfig,
+        feature_config: FeatureConfig,
+        missing_config: MissingValueConfig = None,
+        target_transformer: object = None,
+    ) -> None:
+        """Convenient wrapper around scikit-learn style estimators
+
+        Args:
+            model_config (ModelConfig): Instance of the ModelConfig object defining the model
+            feature_config (FeatureConfig): Instance of the FeatureConfig object defining the features
+            missing_config (MissingValueConfig, optional): Instance of the MissingValueConfig object
+                defining how to fill missing values. Defaults to None.
+            target_transformer (object, optional): Instance of target transformers from src.transforms.
+                Should support `fit`, `transform`, and `inverse_transform`. It should also
+                return `pd.Series` with datetime index to work without an error. Defaults to None.
+        """
+        self.model_config = model_config
+        self.feature_config = feature_config
+        self.missing_config = missing_config
+        self.target_transformer = target_transformer
+        self._model = clone(model_config.model)
+        if self.model_config.normalize:
+            self._scaler = StandardScaler()
+        if self.model_config.encode_categorical:
+            self._cat_encoder = self.model_config.categorical_encoder
+            self._encoded_categorical_features = copy.deepcopy(
+                self.feature_config.categorical_features
+            )
+
+    def fit(
+        self,
+        X: pl.DataFrame,
+        y: Union[pl.Series, np.ndarray],
+        w: Union[pl.Series, np.ndarray],
+        is_transformed: bool = False,
+        fit_kwargs: Dict = {},
+    ):
+        """Handles standardization, missing value handling, and training the model
+
+        Args:
+            X (pd.DataFrame): The dataframe with the features as columns
+            y (Union[pd.Series, np.ndarray]): Dataframe, Series, or np.ndarray with the targets
+            is_transformed (bool, optional): Whether the target is already transformed.
+            If `True`, fit wont be transforming the target using the target_transformer
+                if provided. Defaults to False.
+            fit_kwargs (Dict, optional): The dictionary with keyword args to be passed to the
+                fit funciton of the model. Defaults to {}.
+        """
+        missing_feats = difference_list(X.columns, self.feature_config.feature_list)
+        if len(missing_feats) > 0:
+            warnings.warn(
+                f"Some features in defined in FeatureConfig is not present in the dataframe. Ignoring these features: {missing_feats}"
+            )
+        self._continuous_feats = intersect_list(
+            self.feature_config.continuous_features, X.columns
+        )
+        self._categorical_feats = intersect_list(
+            self.feature_config.categorical_features, X.columns
+        )
+        self._boolean_feats = intersect_list(
+            self.feature_config.boolean_features, X.columns
+        )
+        if self.model_config.fill_missing:
+            X = self.missing_config.impute_missing_values(X)
+
+        if self.model_config.encode_categorical:
+            missing_cat_cols = difference_list(
+                self._categorical_feats,
+                self._cat_encoder.cols,
+            )
+            assert (
+                len(missing_cat_cols) == 0
+            ), f"These categorical features are not handled by the categorical_encoder: {missing_cat_cols}"
+            
+            # Fit the encoder before getting feature names
+            X = self._cat_encoder.fit_transform(X, y)
+            
+            # Now get the feature names from the fitted encoder
+            try:
+                feature_names = self._cat_encoder.get_feature_names()
+            except AttributeError:
+                # For newer versions of sklearn
+                feature_names = self._cat_encoder.get_feature_names_out()
+            
+            self._encoded_categorical_features = difference_list(
+                feature_names,
+                self.feature_config.continuous_features + self.feature_config.boolean_features,
+            )
+        else:
+            self._encoded_categorical_features = []
+
+
+        if self.model_config.normalize:
+            X[
+                self._continuous_feats + self._encoded_categorical_features
+            ] = self._scaler.fit_transform(
+                X[self._continuous_feats + self._encoded_categorical_features]
+            )
+        self._train_features = X.columns
+
+        if not is_transformed and self.target_transformer is not None:
+            y = self.target_transformer.fit_transform(y)
+
+        # Convert the wights to numpy array if they are asked
+        if type(w)==pl.DataFrame:
+            w = w.to_numpy().ravel()
+        
+        self._model.fit(X.to_numpy(), y.to_numpy().ravel(), sample_weight=w, **fit_kwargs)
+
+        return self
+
+    def predict(self, X: pl.DataFrame) -> pl.Series:
+        """Predicts on the given dataframe using the trained model
+
+        Args:
+            X (pd.DataFrame): The dataframe with the features as columns. The index is passed on to the prediction series
+
+        Returns:
+            pd.Series: predictions using the model as a pandas Series with datetime index
+        """
+        assert len(intersect_list(self._train_features, X.columns)) == len(
+            self._train_features
+        ), f"All the features during training is not available while predicting: {difference_list(self._train_features, X.columns)}"
+        if self.model_config.fill_missing:
+            X = self.missing_config.impute_missing_values(X)
+        if self.model_config.encode_categorical:
+            X = self._cat_encoder.transform(X)
+        if self.model_config.normalize:
+            X[
+                self._continuous_feats + self._encoded_categorical_features
+            ] = self._scaler.transform(
+                X[self._continuous_feats + self._encoded_categorical_features]
+            )
+        y_pred = pl.Series(
+            self._model.predict(X).ravel(),
+            index=X.index,
+            name=f"{self.model_config.name}",
+        )
+        if self.target_transformer is not None:
+            y_pred = self.target_transformer.inverse_transform(y_pred)
+            y_pred.name = f"{self.model_config.name}"
+        return y_pred
+
+    def feature_importance(self) -> pl.DataFrame:
+        """Generates the feature importance dataframe, if available. For linear
+            models the coefficients are used and tree based models use the inbuilt
+            feature importance. For the rest of the models, it returns an empty dataframe.
+
+        Returns:
+            pd.DataFrame: Feature Importance dataframe, sorted in descending order of its importances.
+        """
+        if hasattr(self._model, "coef_") or hasattr(
+            self._model, "feature_importances_"
+        ):
+            feat_df = pl.DataFrame(
+                {
+                    "feature": self._train_features,
+                    "importance": self._model.coef_.ravel()
+                    if hasattr(self._model, "coef_")
+                    else self._model.feature_importances_.ravel(),
+                }
+            )
+            feat_df["_abs_imp"] = np.abs(feat_df.importance)
+            feat_df = feat_df.sort_values("_abs_imp", ascending=False).drop(
+                columns="_abs_imp"
+            )
+        else:
+            feat_df = pl.DataFrame()
+        return feat_df

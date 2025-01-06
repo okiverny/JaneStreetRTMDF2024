@@ -15,6 +15,15 @@ def R2_metric(y_true, y_pred):
     is_higher_better = True
     return 'r2_score', r2_score(y_true, y_pred), is_higher_better
 
+def intersect_list(list1, list2):
+    return list(set(list1).intersection(set(list2)))
+
+def difference_list(list1, list2):
+    return list(set(list1)- set(list2))
+
+def union_list(list1, list2):
+    return list(set(list1).union(set(list2)))
+
 def reduce_memory_usage_pl(df: pl.DataFrame) -> pl.DataFrame:
     """ Reduce memory usage by polars dataframe {df} with name {name} by changing its data types."""
     
