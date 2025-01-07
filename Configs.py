@@ -270,17 +270,17 @@ class FeatureConfig:
             pl.col(feature_list + self.index_cols).exclude(delete_index_cols)
         )
         y = (
-            df.select(pl.col([self.target])) # + self.index_cols
+            df.select(pl.col([self.target])).to_series() # + self.index_cols
             if self.target in df.columns
             else None
         )
         y_orig = (
-            df.select(pl.col([self.original_target])) # + self.index_cols
+            df.select(pl.col([self.original_target])).to_series() # + self.index_cols
             if self.original_target in df.columns
             else None
         )
         w = (
-            df.select(pl.col([self.weight])) # + self.index_cols
+            df.select(pl.col([self.weight])).to_series() # + self.index_cols
             if self.weight in df.columns
             else None
         )
@@ -436,10 +436,11 @@ class MLForecast:
             y = self.target_transformer.fit_transform(y)
 
         # Convert the wights to numpy array if they are asked
-        if type(w)==pl.DataFrame:
-            w = w.to_numpy().ravel()
+        #if type(w)==pl.DataFrame:
+        #    w = w.to_numpy().ravel()
         
-        self._model.fit(X.to_numpy(), y.to_numpy().ravel(), sample_weight=w, **fit_kwargs)
+        #self._model.fit(X.to_numpy(), y.to_numpy().ravel(), sample_weight=w, **fit_kwargs)
+        self._model.fit(X, y, sample_weight=w, **fit_kwargs)
 
         return self
 
@@ -465,10 +466,10 @@ class MLForecast:
             ] = self._scaler.transform(
                 X[self._continuous_feats + self._encoded_categorical_features]
             )
+
         y_pred = pl.Series(
-            self._model.predict(X).ravel(),
-            index=X.index,
             name=f"{self.model_config.name}",
+            values=self._model.predict(X).ravel(),
         )
         if self.target_transformer is not None:
             y_pred = self.target_transformer.inverse_transform(y_pred)
@@ -481,23 +482,30 @@ class MLForecast:
             feature importance. For the rest of the models, it returns an empty dataframe.
 
         Returns:
-            pd.DataFrame: Feature Importance dataframe, sorted in descending order of its importances.
+            pl.DataFrame: Feature Importance dataframe, sorted in descending order of its importances.
         """
-        if hasattr(self._model, "coef_") or hasattr(
-            self._model, "feature_importances_"
-        ):
-            feat_df = pl.DataFrame(
-                {
-                    "feature": self._train_features,
-                    "importance": self._model.coef_.ravel()
-                    if hasattr(self._model, "coef_")
-                    else self._model.feature_importances_.ravel(),
-                }
+        if hasattr(self._model, "coef_") or hasattr(self._model, "feature_importances_"):
+            # Determine the importance values
+            importances = (
+                self._model.coef_.ravel()
+                if hasattr(self._model, "coef_")
+                else self._model.feature_importances_.ravel()
             )
-            feat_df["_abs_imp"] = np.abs(feat_df.importance)
-            feat_df = feat_df.sort_values("_abs_imp", ascending=False).drop(
-                columns="_abs_imp"
+            feat_df = pl.DataFrame({
+                "feature": self._train_features,
+                "importance": importances
+            })
+
+            # Add absolute importance column for sorting
+            feat_df = feat_df.with_columns(
+                pl.col("importance").abs().alias("_abs_imp")
             )
+
+            # Sort by absolute importance and drop the temporary column
+            feat_df = feat_df.sort("_abs_imp", descending=True).drop("_abs_imp")
+
         else:
+            # Return an empty Polars DataFrame if no feature importance is available
             feat_df = pl.DataFrame()
+
         return feat_df
