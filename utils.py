@@ -1,5 +1,6 @@
 import polars as pl
 import numpy as np
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 def R2w_metric(y_true, y_pred, weight):
     """
@@ -14,6 +15,27 @@ def R2_metric(y_true, y_pred):
     """
     is_higher_better = True
     return 'r2_score', r2_score(y_true, y_pred), is_higher_better
+
+def calculate_metrics(
+    y_true: pl.Series, y_pred: pl.Series, name: str, weights: pl.Series = None
+):
+    """Method to calculate the metrics given the actual and predicted series
+
+    Args:
+        y (pl.Series): Actual target with datetime index
+        y_pred (pl.Series): Predictions with datetime index
+        name (str): Name or identification for the model
+        weights (pl.Series, optional): Actual train target to calculate MASE with datetime index. Defaults to None.
+
+    Returns:
+        Dict: Dictionary with MAE, MSE, and R2
+    """
+    return {
+        "Algorithm": name,
+        "R2": r2_score(y_true, y_pred, sample_weight = weights),
+        "MAE": mean_absolute_error(y_true, y_pred, sample_weight = weights),
+        "MSE": mean_squared_error(y_true, y_pred, sample_weight = weights),
+    }
 
 def intersect_list(list1, list2):
     return list(set(list1).intersection(set(list2)))

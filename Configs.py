@@ -13,6 +13,7 @@ from autoregressive_features import (
     add_ewma
 )
 from utils import intersect_list, difference_list
+from utils import R2_metric, R2w_metric
 
 @dataclass
 class LagFeaturesConfig:
@@ -435,11 +436,6 @@ class MLForecast:
         if not is_transformed and self.target_transformer is not None:
             y = self.target_transformer.fit_transform(y)
 
-        # Convert the wights to numpy array if they are asked
-        #if type(w)==pl.DataFrame:
-        #    w = w.to_numpy().ravel()
-        
-        #self._model.fit(X.to_numpy(), y.to_numpy().ravel(), sample_weight=w, **fit_kwargs)
         self._model.fit(X, y, sample_weight=w, **fit_kwargs)
 
         return self
