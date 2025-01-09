@@ -15,7 +15,6 @@ from temporal_features import (
     add_temporal_features,
     bulk_add_fourier_features
 )
-    
 
 class SymbolLagsCollection:
     def __init__(self, date_buffer_size: int, missing_config: MissingValueConfig):
@@ -113,3 +112,32 @@ class SymbolLagsCollection:
     def __len__(self):
         """Get the number of symbols currently tracked."""
         return len(self.symbol_data)
+
+
+class RetrainData:
+    def __init__(self, date_buffer_size: int):
+        self.date_buffer_size = date_buffer_size
+        self.retrain_data = pl.DataFrame()
+
+    def is_full(self) -> bool:
+        return len(self.retrain_data["date_id"].unique(maintain_order=True).to_list()) == self.date_buffer_size
+
+    def add_data(self, new_data: pl.DataFrame):
+        if self.retrain_data.is_empty():
+            self.retrain_data = new_data
+        else:
+            new_date_id = new_data["date_id"].unique(maintain_order=True).to_list()[0]
+            collected_dates = self.retrain_data["date_id"].unique(maintain_order=True).to_list()
+
+            if (self.is_full()) and (new_date_id not in collected_dates):
+                self.retrain_data = self.retrain_data.filter(pl.col("date_id")>collected_dates[0])
+                self.retrain_data = pl.concat([self.retrain_data, new_data])
+            else:
+                self.retrain_data = pl.concat([self.retrain_data, new_data])
+
+    def reset_data(self):
+        self.retrain_data = pl.DataFrame()
+
+    def __len__(self):
+        """Get the number of date_id currently tracked."""
+        return len(self.retrain_data["date_id"].unique(maintain_order=True).to_list())
