@@ -114,26 +114,53 @@ class SymbolLagsCollection:
         return len(self.symbol_data)
 
 
-class RetrainData:
+class RetrainDataCollection:
     def __init__(self, date_buffer_size: int):
         self.date_buffer_size = date_buffer_size
         self.retrain_data = pl.DataFrame()
+        self.retrain_data_today = []
+        self.retrain_lagged_target = pl.DataFrame()
 
     def is_full(self) -> bool:
         return len(self.retrain_data["date_id"].unique(maintain_order=True).to_list()) == self.date_buffer_size
 
-    def add_data(self, new_data: pl.DataFrame):
-        if self.retrain_data.is_empty():
-            self.retrain_data = new_data
-        else:
-            new_date_id = new_data["date_id"].unique(maintain_order=True).to_list()[0]
-            collected_dates = self.retrain_data["date_id"].unique(maintain_order=True).to_list()
+    def target_is_full(self) -> bool:
+        return len(self.retrain_lagged_target["date_id"].unique(maintain_order=True).to_list()) == self.date_buffer_size
 
-            if (self.is_full()) and (new_date_id not in collected_dates):
-                self.retrain_data = self.retrain_data.filter(pl.col("date_id")>collected_dates[0])
-                self.retrain_data = pl.concat([self.retrain_data, new_data])
+    def add_data(self, new_data: pl.DataFrame):
+        # Current time id
+        time_id = new_data["time_id"].unique(maintain_order=True).to_list()[0]
+
+        if time_id==0 and len(self.retrain_data_today)>0:
+            print('')
+            if self.retrain_data.is_empty():
+                self.retrain_data = pl.concat(self.retrain_data_today)
             else:
-                self.retrain_data = pl.concat([self.retrain_data, new_data])
+                # Remove the first day from data collection if it is full
+                if self.is_full():
+                    collected_dates = self.retrain_data["date_id"].unique(maintain_order=True).to_list()
+                    self.retrain_data = self.retrain_data.filter(pl.col("date_id")>collected_dates[0])
+                
+                # Concat the data
+                self.retrain_data = pl.concat([self.retrain_data]+self.retrain_data_today)
+
+            # Start today's list from time_id=0 again
+            self.retrain_data_today=[]
+            self.retrain_data_today.append(new_data)
+        else:
+            self.retrain_data_today.append(new_data)
+
+    def add_lagged_target(self, new_target: pl.DataFrame):
+        if self.retrain_lagged_target.is_empty():
+            self.retrain_lagged_target = new_target
+        else:
+            new_date_id = new_target["date_id"].unique(maintain_order=True).to_list()[0]
+            collected_dates = self.retrain_lagged_target["date_id"].unique(maintain_order=True).to_list()
+
+            if self.target_is_full():
+                self.retrain_lagged_target = self.retrain_lagged_target.filter(pl.col("date_id")>collected_dates[0])
+
+            self.retrain_lagged_target = pl.concat([self.retrain_lagged_target, new_target])
 
     def reset_data(self):
         self.retrain_data = pl.DataFrame()
