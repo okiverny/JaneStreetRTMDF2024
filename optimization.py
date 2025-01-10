@@ -4,7 +4,7 @@ from Configs import (
     FeatureConfig,
     ModelConfig,
 )
-from main import evaluate_model
+#from main import evaluate_model
 
 def run_optuna(n_trials: int):
     # Set startup trials as 5 because out total trials is lower.
@@ -50,16 +50,14 @@ def lgbm_objective_step1(trial):
         #"max_depth":     10,
         "learning_rate": 0.10,
         "n_estimators":  trial.suggest_int("n_estimators", 5, 200),
-        "colsample_bytree": trial.suggest_float ("colsample_bytree", 0.3, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.3, 1.0),
         "colsample_bynode": 0.6,
         "lambda_l1":     trial.suggest_float("lambda_l1", 0, 10),
         "lambda_l2":     trial.suggest_float("lambda_l2", 0, 10),
         "extra_trees":   True,
         "num_leaves":    trial.suggest_int("num_leaves", 10, 100),
         "max_bin":       255,
-        #'device':'gpu',
         "n_jobs":        -1,
-        #"verbose":       1,
     }
     model_config = ModelConfig(
         model=LGBMRegressor(**lgb_params, verbose=-1), # try MAE or Huber loss to penalize outliers less!!
@@ -68,7 +66,7 @@ def lgbm_objective_step1(trial):
         fill_missing=False, # # LGBM handles missing values
     )
 
-    _, metrics, _= evaluate_model(feature_config, model_config, train_dates=[1580, 1600], test_dates=[1600, 1640], use_weights=True)
+    _, metrics, _= evaluate_model(feature_config, model_config, train_dates=[1480, 1580], test_dates=[1580, 1630], use_weights=True)
 
     return metrics['R2']
 
