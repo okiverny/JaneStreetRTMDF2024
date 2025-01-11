@@ -164,6 +164,13 @@ class RetrainDataCollection:
 
     def reset_data(self):
         self.retrain_data = pl.DataFrame()
+        self.retrain_data_today = []
+        self.retrain_lagged_target = pl.DataFrame()
+
+    def get_retrain_data(self) -> pl.DataFrame:
+        # Join test data and lagged data
+        return self.retrain_data.join(self.retrain_lagged_target, on=['date_id', 'time_id', 'symbol_id'],  how='inner')
+
 
     def __len__(self):
         """Get the number of date_id currently tracked."""
