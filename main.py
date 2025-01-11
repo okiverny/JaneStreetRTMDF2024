@@ -79,13 +79,13 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
                     provided_data = missing_config.impute_missing_values(provided_data)
 
                 # Backup the features for online learning
-                retrain_data_collection.add_data(provided_data.drop(responder_cols))
+                retrain_data_collection.add_data(provided_data) #.drop(responder_cols)
 
                 if provided_lags is not None:
                     # Add new lags data to collection
                     symbol_lags_collection.add_lags(provided_lags)
 
-                    combined_lagged_data = []
+                    combined_lagged_data, combined_lagged_data_yesterday = [], []
                     new_symbols_appeared = []
                     combined_lagged_target = []
 
@@ -100,11 +100,16 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
 
                             # Backup the targets from yesterday
                             lagged_target = df.with_columns(
-                                pl.col('responder_6_lag_1').alias('responder_6') # rename the target column
+                                pl.col('responder_6_lag_1').alias('y_responder_6') # rename the target column
                             ).select(
-                                ['date_id', 'time_id', 'symbol_id', 'responder_6']
+                                ['date_id', 'time_id', 'symbol_id', 'y_responder_6']
                             ).filter(pl.col("date_id")==date_id-1) # select yesterday's targets
                             combined_lagged_target.append(lagged_target)
+
+                            # Backup lag features from yesterday data
+                            combined_lagged_data_yesterday.append(
+                                df.filter(pl.col("date_id")==date_id-1) # drop()
+                            )
 
                             # Increment the 'date_id' column by 1 and keep only the values from 'today'
                             df = df.with_columns(
@@ -117,14 +122,28 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
                     # Combining the lagged data from all symbol_id
                     combined_lagged_data = pl.concat(combined_lagged_data)
                     combined_lagged_target = pl.concat(combined_lagged_target)
+                    combined_lagged_data_yesterday = pl.concat(combined_lagged_data_yesterday)
 
-                    # Backup the lagged targets for online training
-                    retrain_data_collection.add_lagged_target(combined_lagged_target)
+                    # Backup the lagged targets from yesterday for online training
+                    retrain_data_collection.add_lagged_target(
+                        combined_lagged_data_yesterday.join(combined_lagged_target, on=['date_id', 'time_id', 'symbol_id'],  how='left')
+                    )
 
                     print('---------')
                     print('date=', date_id)
                     print(retrain_data_collection.retrain_data)
                     print(retrain_data_collection.retrain_lagged_target)
+                    if not retrain_data_collection.retrain_data.is_empty():
+                        print(retrain_data_collection.get_retrain_data())
+
+                    # Check if the collection of retrain data is stable
+                    # N_lagged_data_yesterday = len(retrain_data_collection.retrain_data.filter(pl.col("date_id")==date_id-1)["symbol_id"].unique(maintain_order=True).to_list()) if not retrain_data_collection.retrain_data.is_empty() else 0
+                    # N_lagged_target_yesterday = len(retrain_data_collection.retrain_lagged_target.filter(pl.col("date_id")==date_id-1)["symbol_id"].unique(maintain_order=True).to_list())
+                    # if N_lagged_data_yesterday == N_lagged_target_yesterday:
+                    #     print(30*'=')
+                    #     print('Stable')
+                    #     print(30*'=')
+
 
                     # Check the processing time
                     end = time.time()
