@@ -440,6 +440,84 @@ class MLForecast:
 
         return self
 
+    def update(
+        self,
+        X: pl.DataFrame,
+        y: Union[pl.Series, np.ndarray],
+        w: Union[pl.Series, np.ndarray],
+        is_transformed: bool = False,
+        fit_kwargs: Dict = {},
+    ):
+        """Updates a model which was already trained and handles standardization and missing values
+
+        Args:
+            X (pd.DataFrame): The dataframe with the features as columns
+            y (Union[pd.Series, np.ndarray]): Dataframe, Series, or np.ndarray with the targets
+            is_transformed (bool, optional): Whether the target is already transformed.
+            If `True`, fit wont be transforming the target using the target_transformer
+                if provided. Defaults to False.
+            fit_kwargs (Dict, optional): The dictionary with keyword args to be passed to the
+                fit funciton of the model. Defaults to {}.
+        """
+        missing_feats = difference_list(X.columns, self.feature_config.feature_list)
+        if len(missing_feats) > 0:
+            warnings.warn(
+                f"Some features in defined in FeatureConfig is not present in the dataframe. Ignoring these features: {missing_feats}"
+            )
+        self._continuous_feats = intersect_list(
+            self.feature_config.continuous_features, X.columns
+        )
+        self._categorical_feats = intersect_list(
+            self.feature_config.categorical_features, X.columns
+        )
+        self._boolean_feats = intersect_list(
+            self.feature_config.boolean_features, X.columns
+        )
+        if self.model_config.fill_missing:
+            X = self.missing_config.impute_missing_values(X)
+
+        if self.model_config.encode_categorical:
+            missing_cat_cols = difference_list(
+                self._categorical_feats,
+                self._cat_encoder.cols,
+            )
+            assert (
+                len(missing_cat_cols) == 0
+            ), f"These categorical features are not handled by the categorical_encoder: {missing_cat_cols}"
+
+            # Fit the encoder before getting feature names
+            X = self._cat_encoder.fit_transform(X, y)
+
+            # Now get the feature names from the fitted encoder
+            try:
+                feature_names = self._cat_encoder.get_feature_names()
+            except AttributeError:
+                # For newer versions of sklearn
+                feature_names = self._cat_encoder.get_feature_names_out()
+
+            self._encoded_categorical_features = difference_list(
+                feature_names,
+                self.feature_config.continuous_features + self.feature_config.boolean_features,
+            )
+        else:
+            self._encoded_categorical_features = []
+
+
+        if self.model_config.normalize:
+            X[
+                self._continuous_feats + self._encoded_categorical_features
+            ] = self._scaler.transform(
+                X[self._continuous_feats + self._encoded_categorical_features]
+            )
+        self._train_features = X.columns
+
+        if not is_transformed and self.target_transformer is not None:
+            y = self.target_transformer.transform(y)
+
+        self._model.fit(X, y, sample_weight=w, init_model=self._model, **fit_kwargs)
+
+        return self
+
     def predict(self, X: pl.DataFrame) -> pl.Series:
         """Predicts on the given dataframe using the trained model
 
