@@ -279,6 +279,47 @@ def predict(test: pl.DataFrame, lags: pl.DataFrame | None) -> pl.DataFrame | pd.
 
     return predictions
 
+def submit_predictions(missing_config, feature_config):
+
+    date_buffer_size = 5
+    symbol_lags_collection = SymbolLagsCollection(
+        date_buffer_size=date_buffer_size,
+        missing_config=missing_config
+    )
+    retrain_data_collection = RetrainDataCollection(date_buffer_size=date_buffer_size)
+
+    combined_lagged_data = pl.DataFrame()
+    combined_lagged_data_yesterday, combined_lagged_target = pl.DataFrame(), pl.DataFrame()
+
+    model_config = ModelConfig(
+        model=joblib.load('lgb_model.joblib'),
+        name="LightGBM",
+        normalize=False, # LGBM is not affected by normalization
+        fill_missing=False, # # LGBM handles missing values
+    )
+
+    # Construct the MLForecast instance
+    ml_model = MLForecast(
+        model_config=model_config,
+        feature_config=feature_config,
+        missing_config=missing_config
+    )
+
+    inference_server = kaggle_evaluation.jane_street_inference_server.JSInferenceServer(predict)
+
+    if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
+        inference_server.serve()
+    else:
+        inference_server.run_local_gateway(
+            (
+                '/kaggle/input/jane-street-real-time-market-data-forecasting/test.parquet',
+                '/kaggle/input/jane-street-real-time-market-data-forecasting/lags.parquet',
+                #'/kaggle/working/synthetic_test.parquet',
+                #'/kaggle/working/synthetic_lag.parquet',
+            )
+        )
+
+
 def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, train_dates: list, test_dates: list, use_weights: bool = False):
     dataframes_train, dataframes_test = [], []
     for data_part in [26,27,28]:
@@ -330,6 +371,9 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
         fit_kwargs={
             'feature_name': train_features.columns,
             'categorical_feature': feature_config.categorical_features,
+            'eval_set': [(test_features.to_numpy(), test_target.to_numpy())],
+            'eval_sample_weight': [test_weight.to_numpy()] if use_weights else None,
+            'callbacks': [lgbm.log_evaluation(10), lgbm.early_stopping(50)],
         }
     else:
         fit_kwargs={}
@@ -351,7 +395,7 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
     print('Test metrics:', metrics_test)
 
     # Save the model and feature names
-    joblib.dump(ml_model._model, 'lgb_model.joblib')
+    joblib.dump(ml_model._model, model_config.name+'.joblib')
 
     # Save feature importance
     feat_importance_df.write_csv('feature_importance.csv')
@@ -359,45 +403,36 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
     return y_pred, metrics_test, feat_importance_df
 
 
-def submit_predictions(missing_config, feature_config):
-
-    date_buffer_size = 5
-    symbol_lags_collection = SymbolLagsCollection(
-        date_buffer_size=date_buffer_size,
-        missing_config=missing_config
-    )
-    retrain_data_collection = RetrainDataCollection(date_buffer_size=date_buffer_size)
-
-    combined_lagged_data = pl.DataFrame()
-    combined_lagged_data_yesterday, combined_lagged_target = pl.DataFrame(), pl.DataFrame()
+def train_LGBMs(feature_config: FeatureConfig):
+    lgb_params={
+        "boosting_type": "gbdt",
+        "objective":        'mean_squared_error',
+        "random_state":  2025,
+        "max_depth":     5,
+        "learning_rate": 0.05,
+        "n_estimators":  160,
+        "colsample_bytree": 0.6,
+        "colsample_bynode": 0.6,
+        "reg_alpha":     0.2,
+        "reg_lambda":    5,
+        "extra_trees":  True,
+        "num_leaves":    64,
+        "max_bin":       255,
+        #'device':'gpu',
+        "n_jobs":        -1,
+        #"verbose":       1,
+    }
 
     model_config = ModelConfig(
-        model=joblib.load('lgb_model.joblib'),
+        model=LGBMRegressor(**lgb_params),
         name="LightGBM",
         normalize=False, # LGBM is not affected by normalization
         fill_missing=False, # # LGBM handles missing values
     )
 
-    # Construct the MLForecast instance
-    ml_model = MLForecast(
-        model_config=model_config,
-        feature_config=feature_config,
-        missing_config=missing_config
-    )
+    # Train the LGBM model with early stopping and save it
+    evaluate_model(feature_config, model_config, train_dates=[1560, 1600], test_dates=[1600, 1640], use_weights=True)
 
-    inference_server = kaggle_evaluation.jane_street_inference_server.JSInferenceServer(predict)
-
-    if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
-        inference_server.serve()
-    else:
-        inference_server.run_local_gateway(
-            (
-                '/kaggle/input/jane-street-real-time-market-data-forecasting/test.parquet',
-                '/kaggle/input/jane-street-real-time-market-data-forecasting/lags.parquet',
-                #'/kaggle/working/synthetic_test.parquet',
-                #'/kaggle/working/synthetic_lag.parquet',
-            )
-        )
 
 
 def main():
@@ -429,33 +464,7 @@ def main():
         exogenous_features=[f"feature_{idx:02d}" for idx in range(79)]
     )
 
-    lgb_params={
-        "boosting_type": "gbdt",
-        "objective":        'mean_squared_error',
-        "random_state":  2025,
-        "max_depth":     5,
-        "learning_rate": 0.05,
-        "n_estimators":  160,
-        "colsample_bytree": 0.6,
-        "colsample_bynode": 0.6,
-        "reg_alpha":     0.2,
-        "reg_lambda":    5,
-        "extra_trees":  True,
-        "num_leaves":    64,
-        "max_bin":       255,
-        #'device':'gpu',
-        "n_jobs":        -1,
-        #"verbose":       1,
-    }
-
-    model_config = ModelConfig(
-        model=LGBMRegressor(**lgb_params),
-        name="LightGBM",
-        normalize=False, # LGBM is not affected by normalization
-        fill_missing=False, # # LGBM handles missing values
-    )
-
-    evaluate_model(feature_config, model_config, train_dates=[1540, 1600], test_dates=[1600, 1640], use_weights=True)
+    train_LGBMs(feature_config)
 
     ##################### Hyperparamater optimization #####################
     #run_optuna(3)
@@ -464,7 +473,7 @@ def main():
 
     ##################### Test prediction #####################
     
-    submit_predictions(missing_config, feature_config)
+    #submit_predictions(missing_config, feature_config)
     
     ##################### END Test prediction #####################
 
