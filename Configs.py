@@ -353,7 +353,8 @@ class MLForecast:
         self.feature_config = feature_config
         self.missing_config = missing_config
         self.target_transformer = target_transformer
-        self._model = clone(model_config.model)
+        # self._model = clone(model_config.model)
+        self._model = model_config.model
         if self.model_config.normalize:
             self._scaler = StandardScaler()
         if self.model_config.encode_categorical:
@@ -527,6 +528,9 @@ class MLForecast:
         Returns:
             pd.Series: predictions using the model as a pandas Series with datetime index
         """
+        # Quick workaround:
+        self._train_features = X.columns
+
         assert len(intersect_list(self._train_features, X.columns)) == len(
             self._train_features
         ), f"All the features during training is not available while predicting: {difference_list(self._train_features, X.columns)}"

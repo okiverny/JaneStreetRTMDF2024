@@ -7,8 +7,12 @@ import optuna
 import pickle
 import joblib
 
+#environment provided by competition hoster
+#import kaggle_evaluation.jane_street_inference_server
+
 import lightgbm as lgbm
 from  lightgbm import LGBMRegressor
+print(lgbm.__version__)
 
 from DataLoader import SymbolLagsCollection, RetrainDataCollection
 from Configs import (
@@ -79,14 +83,14 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
                     provided_data = missing_config.impute_missing_values(provided_data)
 
                 # Backup the features for online learning
-                retrain_data_collection.add_data(provided_data) #.drop(responder_cols)
+                retrain_data_collection.add_data(provided_data.drop(responder_cols))
 
                 if provided_lags is not None:
                     # Add new lags data to collection
                     symbol_lags_collection.add_lags(provided_lags)
 
                     combined_lagged_data, combined_lagged_data_yesterday = [], []
-                    new_symbols_appeared = []
+                    #new_symbols_appeared = []
                     combined_lagged_target = []
 
                     # Construct features for each 'symbol_id' in test data
@@ -94,15 +98,15 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
 
                         if len(symbol_lags_collection.get_lags(symbol_id))==0:
                             print(f'No lags for symbol_id={symbol_id} is available! Skipping computation of lagged and temporal features')
-                            new_symbols_appeared.append(symbol_id)
+                            #new_symbols_appeared.append(symbol_id)
                         else:
                             df = symbol_lags_collection.construct_features(symbol_lags_collection.get_lags(symbol_id=symbol_id))
 
                             # Backup the targets from yesterday
                             lagged_target = df.with_columns(
-                                pl.col('responder_6_lag_1').alias('y_responder_6') # rename the target column
+                                pl.col('responder_6_lag_1').alias('responder_6') # rename the target column
                             ).select(
-                                ['date_id', 'time_id', 'symbol_id', 'y_responder_6']
+                                ['date_id', 'time_id', 'symbol_id', 'responder_6']
                             ).filter(pl.col("date_id")==date_id-1) # select yesterday's targets
                             combined_lagged_target.append(lagged_target)
 
@@ -181,6 +185,100 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
     print('Processing of the train data is finished!')
 
 
+def predict(test: pl.DataFrame, lags: pl.DataFrame | None) -> pl.DataFrame | pd.DataFrame:
+    global ml_model
+    global symbol_lags_collection, retrain_data_collection
+    global combined_lagged_data, combined_lagged_data_yesterday, combined_lagged_target
+    global missing_config, feature_config, model_config
+
+    # Get today's date_id
+    date_id = test["date_id"].unique(maintain_order=True).to_list()[0]
+    time_id = test["time_id"].unique(maintain_order=True).to_list()[0]
+
+    # fill missing values in features of test data
+    if missing_config!=None:
+        test = missing_config.impute_missing_values(test)
+
+    # Backup the features for online learning
+    retrain_data_collection.add_data(test)  # drop(responder_cols) if this is train dataset
+
+    if lags is not None:
+
+        # Add lags data to the collection
+        symbol_lags_collection.add_lags(lags)
+
+        combined_lagged_data, combined_lagged_data_yesterday = [], []
+        combined_lagged_target = []
+
+        # Construct features for each 'symbol_id' in test data
+        for symbol_id in test['symbol_id']:
+            if len(symbol_lags_collection.get_lags(symbol_id))==0:
+                print(f'No lags for symbol_id={symbol_id} is available! Skipping computation of lagged and temporal features')
+            else:
+                # Create features from the lag data collection
+                df = symbol_lags_collection.construct_features(symbol_lags_collection.get_lags(symbol_id=symbol_id))
+
+                # Backup the targets from yesterday
+                lagged_target = df.with_columns(
+                    pl.col('responder_6_lag_1').alias('responder_6') # rename the target column
+                ).select(
+                    ['date_id', 'time_id', 'symbol_id', 'responder_6']
+                ).filter(pl.col("date_id")==date_id-1) # select yesterday's targets
+                combined_lagged_target.append(lagged_target)
+
+                # Backup lag features from yesterday data
+                combined_lagged_data_yesterday.append(
+                    df.filter(pl.col("date_id")==date_id-1)
+                )
+
+                # Increment the 'date_id' column by 1 and keep only the values from 'today'
+                df = df.with_columns(
+                    (pl.col("date_id") + 1).alias("date_id")  # Increment values and keep the same column name
+                ).filter(pl.col("date_id")==date_id)
+
+                # Append to the list
+                combined_lagged_data.append(df)
+
+        # Combining the lagged data from all symbol_id
+        combined_lagged_data = pl.concat(combined_lagged_data)
+        combined_lagged_target = pl.concat(combined_lagged_target)
+        combined_lagged_data_yesterday = pl.concat(combined_lagged_data_yesterday)
+
+        # Backup the lagged targets from yesterday for online training
+        retrain_data_collection.add_lagged_target(
+            combined_lagged_data_yesterday.join(combined_lagged_target, on=['date_id', 'time_id', 'symbol_id'],  how='left')
+        )
+
+    # Prepare submission data frame
+    predictions = test.select(
+        'row_id',
+        pl.lit(0.0).alias('responder_6'),
+    )
+
+    # Join test data and lagged data
+    test = test.join(combined_lagged_data, on=['date_id', 'time_id', 'symbol_id'],  how='left')
+
+    # Extract the features (X) and the weights
+    test_features, _, _, test_weight = feature_config.get_X_y(
+        test, categorical=True, exogenous=True
+    )
+
+    y_pred_test = ml_model.predict(test_features)
+    y_pred_test = y_pred_test.rename('responder_6')
+
+    # Add the predictions to the dataframe
+    predictions = predictions.with_columns(y_pred_test)
+    print(predictions)
+
+    # The predict function must return a DataFrame
+    assert isinstance(predictions, pl.DataFrame | pd.DataFrame)
+    # with columns 'row_id', 'responer_6'
+    assert list(predictions.columns) == ['row_id', 'responder_6']
+    # and as many rows as the test data.
+    assert len(predictions) == len(test)
+
+    return predictions
+
 def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, train_dates: list, test_dates: list, use_weights: bool = False):
     dataframes_train, dataframes_test = [], []
     for data_part in [26,27,28]:
@@ -252,8 +350,54 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
     print('Train metrics:', metrics_train)
     print('Test metrics:', metrics_test)
 
+    # Save the model and feature names
+    joblib.dump(ml_model._model, 'lgb_model.joblib')
+
+    # Save feature importance
+    feat_importance_df.write_csv('feature_importance.csv')
+
     return y_pred, metrics_test, feat_importance_df
 
+
+def submit_predictions(missing_config, feature_config):
+
+    date_buffer_size = 5
+    symbol_lags_collection = SymbolLagsCollection(
+        date_buffer_size=date_buffer_size,
+        missing_config=missing_config
+    )
+    retrain_data_collection = RetrainDataCollection(date_buffer_size=date_buffer_size)
+
+    combined_lagged_data = pl.DataFrame()
+    combined_lagged_data_yesterday, combined_lagged_target = pl.DataFrame(), pl.DataFrame()
+
+    model_config = ModelConfig(
+        model=joblib.load('lgb_model.joblib'),
+        name="LightGBM",
+        normalize=False, # LGBM is not affected by normalization
+        fill_missing=False, # # LGBM handles missing values
+    )
+
+    # Construct the MLForecast instance
+    ml_model = MLForecast(
+        model_config=model_config,
+        feature_config=feature_config,
+        missing_config=missing_config
+    )
+
+    inference_server = kaggle_evaluation.jane_street_inference_server.JSInferenceServer(predict)
+
+    if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
+        inference_server.serve()
+    else:
+        inference_server.run_local_gateway(
+            (
+                '/kaggle/input/jane-street-real-time-market-data-forecasting/test.parquet',
+                '/kaggle/input/jane-street-real-time-market-data-forecasting/lags.parquet',
+                #'/kaggle/working/synthetic_test.parquet',
+                #'/kaggle/working/synthetic_lag.parquet',
+            )
+        )
 
 
 def main():
@@ -266,56 +410,63 @@ def main():
     missing_config=None
 
     print('Processing train data!')
-    process_train(5, missing_config)
+    #process_train(5, missing_config)
 
 
-    # ##################
-    # feature_config = FeatureConfig(
-    #     date='time_id',
-    #     target='responder_6',
-    #     weight='weight',
-    #     continuous_features=[f"feature_{idx:02d}" for idx in range(79) if idx not in [9, 10, 11]] + \
-    #         [f"responder_{idx}_lag_1" for idx in range(9)] + \
-    #         ['time_id_Elapsed',
-    #          'time_id_Period_968_sin_1','time_id_Period_968_sin_2','time_id_Period_968_sin_3','time_id_Period_968_sin_4','time_id_Period_968_sin_5',
-    #          'time_id_Period_968_cos_1','time_id_Period_968_cos_2','time_id_Period_968_cos_3','time_id_Period_968_cos_4','time_id_Period_968_cos_5'],
-    #     categorical_features=['symbol_id'] + [f"feature_{idx:02d}" for idx in [9, 10, 11]] + [f"time_id_Period_{period}" for period in [332, 725, 968]],
-    #     boolean_features=[],
-    #     index_cols=["time_id"],
-    #     exogenous_features=[f"feature_{idx:02d}" for idx in range(79)]
-    # )
+    ##################
+    feature_config = FeatureConfig(
+        date='time_id',
+        target='responder_6',
+        weight='weight',
+        continuous_features=[f"feature_{idx:02d}" for idx in range(79) if idx not in [9, 10, 11]] + \
+            [f"responder_{idx}_lag_1" for idx in range(9)] + \
+            ['time_id_Elapsed',
+             'time_id_Period_968_sin_1','time_id_Period_968_sin_2','time_id_Period_968_sin_3','time_id_Period_968_sin_4','time_id_Period_968_sin_5',
+             'time_id_Period_968_cos_1','time_id_Period_968_cos_2','time_id_Period_968_cos_3','time_id_Period_968_cos_4','time_id_Period_968_cos_5'],
+        categorical_features=['symbol_id'] + [f"feature_{idx:02d}" for idx in [9, 10, 11]] + [f"time_id_Period_{period}" for period in [332, 725, 968]],
+        boolean_features=[],
+        index_cols=["time_id"],
+        exogenous_features=[f"feature_{idx:02d}" for idx in range(79)]
+    )
 
-    # lgb_params={
-    #     "boosting_type": "gbdt",
-    #     "objective":        'mean_squared_error',
-    #     "random_state":  2025,
-    #     "max_depth":     5,
-    #     "learning_rate": 0.05,
-    #     "n_estimators":  160,
-    #     "colsample_bytree": 0.6,
-    #     "colsample_bynode": 0.6,
-    #     "reg_alpha":     0.2,
-    #     "reg_lambda":    5,
-    #     "extra_trees":  True,
-    #     "num_leaves":    64,
-    #     "max_bin":       255,
-    #     #'device':'gpu',
-    #     "n_jobs":        -1,
-    #     #"verbose":       1,
-    # }
+    lgb_params={
+        "boosting_type": "gbdt",
+        "objective":        'mean_squared_error',
+        "random_state":  2025,
+        "max_depth":     5,
+        "learning_rate": 0.05,
+        "n_estimators":  160,
+        "colsample_bytree": 0.6,
+        "colsample_bynode": 0.6,
+        "reg_alpha":     0.2,
+        "reg_lambda":    5,
+        "extra_trees":  True,
+        "num_leaves":    64,
+        "max_bin":       255,
+        #'device':'gpu',
+        "n_jobs":        -1,
+        #"verbose":       1,
+    }
 
-    # model_config = ModelConfig(
-    #     model=LGBMRegressor(**lgb_params), # try MAE or Huber loss to penalize outliers less!!
-    #     name="LightGBM",
-    #     normalize=False, # LGBM is not affected by normalization
-    #     fill_missing=False, # # LGBM handles missing values
-    # )
+    model_config = ModelConfig(
+        model=LGBMRegressor(**lgb_params),
+        name="LightGBM",
+        normalize=False, # LGBM is not affected by normalization
+        fill_missing=False, # # LGBM handles missing values
+    )
 
-    # evaluate_model(feature_config, model_config, train_dates=[1540, 1600], test_dates=[1600, 1640], use_weights=True)
+    evaluate_model(feature_config, model_config, train_dates=[1540, 1600], test_dates=[1600, 1640], use_weights=True)
 
     ##################### Hyperparamater optimization #####################
     #run_optuna(3)
     ##################### END Hyperparamater optimization #####################
+
+
+    ##################### Test prediction #####################
+    
+    submit_predictions(missing_config, feature_config)
+    
+    ##################### END Test prediction #####################
 
 
 

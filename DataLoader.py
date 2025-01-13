@@ -4,7 +4,6 @@ import polars as pl
 from collections import defaultdict, deque
 from typing import List, Tuple, Dict
 from Configs import MissingValueConfig
-from utils import check_nulls
 from autoregressive_features import (
     add_lags,
     add_rolling_features,
@@ -132,7 +131,6 @@ class RetrainDataCollection:
         time_id = new_data["time_id"].unique(maintain_order=True).to_list()[0]
 
         if time_id==0 and len(self.retrain_data_today)>0:
-            print('')
             if self.retrain_data.is_empty():
                 self.retrain_data = pl.concat(self.retrain_data_today)
             else:
@@ -170,7 +168,6 @@ class RetrainDataCollection:
     def get_retrain_data(self) -> pl.DataFrame:
         # Join test data and lagged data
         return self.retrain_data.join(self.retrain_lagged_target, on=['date_id', 'time_id', 'symbol_id'],  how='inner')
-
 
     def __len__(self):
         """Get the number of date_id currently tracked."""
