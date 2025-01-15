@@ -7,7 +7,7 @@ import optuna
 import pickle
 import joblib
 
-#environment provided by competition hoster
+#environment provided by competition host
 #import kaggle_evaluation.jane_street_inference_server
 
 import lightgbm as lgbm
@@ -186,7 +186,7 @@ def process_train(collection_size: int, missing_config: MissingValueConfig | Non
 
 
 def predict(test: pl.DataFrame, lags: pl.DataFrame | None) -> pl.DataFrame | pd.DataFrame:
-    global ml_model
+    global ml_models
     global symbol_lags_collection, retrain_data_collection
     global combined_lagged_data, combined_lagged_data_yesterday, combined_lagged_target
     global missing_config, feature_config, model_config
@@ -263,8 +263,15 @@ def predict(test: pl.DataFrame, lags: pl.DataFrame | None) -> pl.DataFrame | pd.
         test, categorical=True, exogenous=True
     )
 
-    y_pred_test = ml_model.predict(test_features)
-    y_pred_test = y_pred_test.rename('responder_6')
+    # Predict with all models and compute the mean
+    eps = 1e-10
+    test_preds = [model.predict(test_features).to_numpy() for model in ml_models]
+    test_preds = np.mean(test_preds, axis=0)
+    test_preds = np.clip(test_preds,-5+eps,5-eps)
+    y_pred_test = pl.Series('responder_6', test_preds)
+
+    #y_pred_test = ml_model.predict(test_features)
+    #y_pred_test = y_pred_test.rename('responder_6')
 
     # Add the predictions to the dataframe
     predictions = predictions.with_columns(y_pred_test)
@@ -291,19 +298,22 @@ def submit_predictions(missing_config, feature_config):
     combined_lagged_data = pl.DataFrame()
     combined_lagged_data_yesterday, combined_lagged_target = pl.DataFrame(), pl.DataFrame()
 
-    model_config = ModelConfig(
-        model=joblib.load('lgb_model.joblib'),
-        name="LightGBM",
-        normalize=False, # LGBM is not affected by normalization
-        fill_missing=False, # # LGBM handles missing values
-    )
+    ml_models = []
+    for imodel in range(2):
+        model_config = ModelConfig(
+            model=joblib.load('LightGBM'+str(imodel)+'.joblib'),
+            name="LightGBM"+str(imodel),
+            normalize=False, # LGBM is not affected by normalization
+            fill_missing=False, # # LGBM handles missing values
+        )
 
-    # Construct the MLForecast instance
-    ml_model = MLForecast(
-        model_config=model_config,
-        feature_config=feature_config,
-        missing_config=missing_config
-    )
+        # Construct the MLForecast instance
+        ml_model = MLForecast(
+            model_config=model_config,
+            feature_config=feature_config,
+            missing_config=missing_config
+        )
+        ml_models.append(ml_model)
 
     inference_server = kaggle_evaluation.jane_street_inference_server.JSInferenceServer(predict)
 
@@ -326,7 +336,7 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
         data=pl.read_parquet(f"processed_data/data_part_{data_part}.parquet").filter( (pl.col("date_id")>=train_dates[0]) & (pl.col("date_id")<train_dates[1]) )
         dataframes_train.append(data)
 
-        data_test=pl.read_parquet(f"processed_data/data_part_{data_part}.parquet").filter( (pl.col("date_id")>test_dates[0]) & (pl.col("date_id")>=test_dates[1]) )
+        data_test=pl.read_parquet(f"processed_data/data_part_{data_part}.parquet").filter( (pl.col("date_id")>=test_dates[0]) & (pl.col("date_id")<test_dates[1]) )
         dataframes_test.append(data_test)
 
     # Manipulate with the train data
@@ -398,12 +408,14 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
     joblib.dump(ml_model._model, model_config.name+'.joblib')
 
     # Save feature importance
-    feat_importance_df.write_csv('feature_importance.csv')
+    feat_importance_df.write_csv('feature_importance_'+model_config.name+'.csv')
+
+    #print(y_pred.to_numpy())
 
     return y_pred, metrics_test, feat_importance_df
 
 
-def train_LGBMs(feature_config: FeatureConfig):
+def train_LGBMs(feature_config: FeatureConfig, training_periods: tuple):
     lgb_params={
         "boosting_type": "gbdt",
         "objective":        'mean_squared_error',
@@ -423,15 +435,18 @@ def train_LGBMs(feature_config: FeatureConfig):
         #"verbose":       1,
     }
 
-    model_config = ModelConfig(
-        model=LGBMRegressor(**lgb_params),
-        name="LightGBM",
-        normalize=False, # LGBM is not affected by normalization
-        fill_missing=False, # # LGBM handles missing values
-    )
+    for i, (train_dates, test_dates) in enumerate(training_periods):
+        print('Training a model:', i, train_dates, test_dates)
 
-    # Train the LGBM model with early stopping and save it
-    evaluate_model(feature_config, model_config, train_dates=[1560, 1600], test_dates=[1600, 1640], use_weights=True)
+        model_config = ModelConfig(
+            model=LGBMRegressor(**lgb_params),
+            name="LightGBM"+str(i),
+            normalize=False, # LGBM is not affected by normalization
+            fill_missing=False, # # LGBM handles missing values
+        )
+
+        # Train the LGBM model with early stopping and save it
+        evaluate_model(feature_config, model_config, train_dates=train_dates, test_dates=test_dates, use_weights=True)
 
 
 
@@ -464,7 +479,14 @@ def main():
         exogenous_features=[f"feature_{idx:02d}" for idx in range(79)]
     )
 
-    train_LGBMs(feature_config)
+    # Train/Validation splits for each model
+    training_periods = (
+        ([1500,1540], [1610, 1650]),
+        ([1540,1580], [1610, 1650]),
+        ([1580,1610], [1610, 1650]),
+    )
+
+    train_LGBMs(feature_config, training_periods)
 
     ##################### Hyperparamater optimization #####################
     #run_optuna(3)
