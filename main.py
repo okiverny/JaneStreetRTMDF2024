@@ -343,14 +343,6 @@ def evaluate_model(feature_config: FeatureConfig, model_config: ModelConfig, tra
     train_data = pl.concat(dataframes_train)
     del dataframes_train
 
-    # print('Columns in the train data frame:')
-    # for col,col_type in zip(train_data.columns, train_data.dtypes):
-    #     print(col,' - ',col_type)
-
-    #print( train_data )
-    #print(train_data.null_count())
-    #print(data["symbol_id"].unique(maintain_order=True).to_list())
-
     train_features, train_target, train_original_target, train_weight = feature_config.get_X_y(
         train_data, categorical=True, exogenous=True
     )
@@ -449,7 +441,6 @@ def train_LGBMs(feature_config: FeatureConfig, training_periods: tuple):
         evaluate_model(feature_config, model_config, train_dates=train_dates, test_dates=test_dates, use_weights=True)
 
 
-
 def main():
     missing_config = MissingValueConfig(
         bfill_columns=[],
@@ -460,8 +451,7 @@ def main():
     missing_config=None
 
     print('Processing train data!')
-    #process_train(5, missing_config)
-
+    process_train(5, missing_config)
 
     ##################
     feature_config = FeatureConfig(
@@ -492,13 +482,11 @@ def main():
     #run_optuna(3)
     ##################### END Hyperparamater optimization #####################
 
-
     ##################### Test prediction #####################
     
     #submit_predictions(missing_config, feature_config)
     
     ##################### END Test prediction #####################
-
 
 
 if __name__ == "__main__":
